@@ -24,7 +24,9 @@ from schemas import (
     MessageResponseSchema,
     UserActivationRequestSchema,
     PasswordResetRequestSchema,
-    PasswordResetCompleteRequestSchema
+    PasswordResetCompleteRequestSchema,
+    UserLoginResponseSchema,
+    UserLoginRequestSchema
 )
 from security.interfaces import JWTAuthManagerInterface
 
@@ -253,3 +255,88 @@ async def reset_password_complete(
         )
 
     return MessageResponseSchema(message="Password reset successfully.")
+
+
+@router.post(
+    "/login/",
+    response_model=UserLoginResponseSchema,
+    status_code=201,
+    responses={
+        401: {
+            "detail": "Unauthorized",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "detail": "Invalid email or password."
+                    }
+                }
+            }
+        },
+        403: {
+            "detail": "Forbidden",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "detail": "User account is not activated."
+                    }
+                }
+            }
+        },
+        500: {
+            "detail": "Internal Server Error",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "detail": "An error occurred while "
+                                  "processing the request."
+                    }
+                }
+            }
+        }
+    }
+)
+async def login(
+    login_data: UserLoginRequestSchema,
+    db: AsyncSession = Depends(get_db),
+    jwt_manager: JWTAuthManagerInterface = Depends(get_jwt_auth_manager),
+    settings: BaseAppSettings = Depends(get_settings)
+):
+    query = select(UserModel).where(UserModel.email == login_data.email)
+    result = await db.execute(query)
+    user = result.scalar_one_or_none()
+
+    if not user or not user.verify_password(login_data.password):
+        raise HTTPException(
+            status_code=401,
+            detail="Invalid email or password."
+        )
+
+    if not user.is_active:
+        raise HTTPException(
+            status_code=403,
+            detail="User account is not activated."
+        )
+
+    jwt_refresh_token = jwt_manager.create_refresh_token({"user_id": user.id})
+
+    try:
+        refresh_token = RefreshTokenModel.create(
+            user_id=user.id,
+            days_valid=settings.LOGIN_TIME_DAYS,
+            token=jwt_refresh_token
+        )
+        db.add(refresh_token)
+        await db.flush()
+        await db.commit()
+    except SQLAlchemyError:
+        await db.rollback()
+        raise HTTPException(
+            status_code=500,
+            detail="An error occurred while processing the request."
+        )
+
+    jwt_access_token = jwt_manager.create_access_token({"user_id": user.id})
+    return UserLoginResponseSchema(
+        access_token=jwt_access_token,
+        refresh_token=jwt_refresh_token
+    )
