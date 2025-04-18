@@ -23,7 +23,8 @@ from schemas import (
     UserRegistrationRequestSchema,
     MessageResponseSchema,
     UserActivationRequestSchema,
-    PasswordResetRequestSchema
+    PasswordResetRequestSchema,
+    PasswordResetCompleteRequestSchema
 )
 from security.interfaces import JWTAuthManagerInterface
 
@@ -185,3 +186,70 @@ async def reset_password(
         message="If you are registered, you will receive "
                 "an email with instructions."
     )
+
+
+@router.post(
+    "/reset-password/complete/",
+    response_model=MessageResponseSchema,
+    responses={
+        400: {
+            "description": "Bad Request",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "detail": "Invalid email or token."
+                    }
+                }
+            }
+        },
+        500: {
+            "description": "Internal Server Error",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "detail": "An error occurred while "
+                                  "resetting the password."
+                    }
+                }
+            }
+        }
+    }
+)
+async def reset_password_complete(
+    data: PasswordResetCompleteRequestSchema,
+    db: AsyncSession = Depends(get_db)
+):
+    query_user = select(UserModel).where(UserModel.email == data.email)
+    result = await db.execute(query_user)
+    user = result.scalar_one_or_none()
+
+    if not user or not user.is_active:
+        raise HTTPException(status_code=400, detail="Invalid email or token.")
+
+    query_token = select(PasswordResetTokenModel).where(
+        PasswordResetTokenModel.user_id == user.id
+    )
+    result = await db.execute(query_token)
+    token_record = result.scalar_one_or_none()
+
+    now_utc = datetime.now(timezone.utc)
+    if not token_record or token_record.token != data.token or cast(
+        datetime, token_record.expires_at
+    ).replace(tzinfo=timezone.utc) < now_utc:
+        if token_record:
+            await db.run_sync(lambda s: s.delete(token_record))
+            await db.commit()
+        raise HTTPException(status_code=400, detail="Invalid email or token.")
+
+    try:
+        user.password = data.password
+        await db.run_sync(lambda s: s.delete(token_record))
+        await db.commit()
+    except SQLAlchemyError as e:
+        await db.rollback()
+        raise HTTPException(
+            status_code=500,
+            detail="An error occurred while resetting the password."
+        )
+
+    return MessageResponseSchema(message="Password reset successfully.")
