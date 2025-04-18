@@ -249,7 +249,7 @@ async def reset_password_complete(
         user.password = data.password
         await db.run_sync(lambda s: s.delete(token_record))
         await db.commit()
-    except SQLAlchemyError as e:
+    except SQLAlchemyError:
         await db.rollback()
         raise HTTPException(
             status_code=500,
