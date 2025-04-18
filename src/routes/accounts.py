@@ -20,7 +20,9 @@ from database import (
 from exceptions import BaseSecurityError
 from schemas import (
     UserRegistrationResponseSchema,
-    UserRegistrationRequestSchema
+    UserRegistrationRequestSchema,
+    MessageResponseSchema,
+    UserActivationRequestSchema
 )
 from security.interfaces import JWTAuthManagerInterface
 
@@ -100,3 +102,58 @@ async def register_user(
         ) from e
     else:
         return UserRegistrationResponseSchema.model_validate(new_user)
+
+
+@router.post(
+    "/activate/", response_model=MessageResponseSchema, responses={
+        400: {
+            "description": "Bad request",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "detail": "Invalid or expired activation token."
+                    }
+                }
+            }
+        }
+    }
+)
+async def activate_account(
+    activation_data: UserActivationRequestSchema,
+    db: AsyncSession = Depends(get_db)
+):
+    query = select(ActivationTokenModel).options(
+        joinedload(ActivationTokenModel.user)
+    ).join(UserModel).where(
+        UserModel.email == activation_data.email,
+        ActivationTokenModel.token == activation_data.token
+    )
+    result = await db.execute(query)
+    token_record = result.scalar_one_or_none()
+
+    now_utc = datetime.now(timezone.utc)
+    if not token_record or cast(datetime, token_record.expires_at).replace(
+        tzinfo=timezone.utc
+    ) < now_utc:
+        if token_record:
+            await db.delete(token_record)
+            await db.commit()
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid or expired activation token."
+        )
+
+    user = token_record.user
+    if user.is_active:
+        raise HTTPException(
+            status_code=400,
+            detail="User account is already active."
+        )
+
+    user.is_active = True
+    await db.delete(token_record)
+    await db.commit()
+
+    return MessageResponseSchema(
+        message="User account activated successfully."
+    )
