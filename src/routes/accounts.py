@@ -22,7 +22,8 @@ from schemas import (
     UserRegistrationResponseSchema,
     UserRegistrationRequestSchema,
     MessageResponseSchema,
-    UserActivationRequestSchema
+    UserActivationRequestSchema,
+    PasswordResetRequestSchema
 )
 from security.interfaces import JWTAuthManagerInterface
 
@@ -156,4 +157,31 @@ async def activate_account(
 
     return MessageResponseSchema(
         message="User account activated successfully."
+    )
+
+
+@router.post("/password-reset/request/", response_model=MessageResponseSchema)
+async def reset_password(
+    password_reset_data: PasswordResetRequestSchema,
+    db: AsyncSession = Depends(get_db)
+):
+    query_user = select(UserModel).where(
+        UserModel.email == password_reset_data.email
+    )
+    result = await db.execute(query_user)
+    user = result.scalar_one_or_none()
+
+    if user and user.is_active:
+        query_tokens = delete(PasswordResetTokenModel).where(
+            PasswordResetTokenModel.user_id == user.id
+        )
+        await db.execute(query_tokens)
+
+        new_token = PasswordResetTokenModel(user_id=cast(int, user.id))
+        db.add(new_token)
+        await db.commit()
+
+    return MessageResponseSchema(
+        message="If you are registered, you will receive "
+                "an email with instructions."
     )
