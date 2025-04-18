@@ -241,13 +241,13 @@ async def reset_password_complete(
         datetime, token_record.expires_at
     ).replace(tzinfo=timezone.utc) < now_utc:
         if token_record:
-            await db.run_sync(lambda s: s.delete(token_record))
+            await db.delete(token_record)
             await db.commit()
         raise HTTPException(status_code=400, detail="Invalid email or token.")
 
     try:
         user.password = data.password
-        await db.run_sync(lambda s: s.delete(token_record))
+        await db.delete(token_record)
         await db.commit()
     except SQLAlchemyError:
         await db.rollback()
