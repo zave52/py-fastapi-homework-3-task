@@ -18,3 +18,14 @@ class BaseEmailPasswordSchema(BaseModel):
     @classmethod
     def validate_password(cls, value: str):
         return accounts_validators.validate_password_strength(value)
+
+
+class UserRegistrationRequestSchema(BaseEmailPasswordSchema):
+    pass
+
+
+class UserRegistrationResponseSchema(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    email: EmailStr
